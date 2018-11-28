@@ -65,7 +65,10 @@ class UpdateCheckerJob(Job):
                     if "major" in value and "minor" in value and "revision" in value and "url" in value:
                         os = key
                         if platform.system() == os: #TODO: add architecture check
-                            newest_version = Version([int(value["major"]), int(value["minor"]), int(value["revision"])])
+                            if "postfix_type" in value and "postfix_version" in value:
+                                newest_version = Version([int(value["major"]), int(value["minor"]), int(value["revision"]), value["postfix_type"], int(value["postfix_version"])])
+                            else:
+                                newest_version = Version([int(value["major"]), int(value["minor"]), int(value["revision"])])
                             if local_version < newest_version:
                                 Logger.log("i", "Found a new version of the software. Spawning message")
 
