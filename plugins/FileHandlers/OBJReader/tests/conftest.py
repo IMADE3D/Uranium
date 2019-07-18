@@ -2,8 +2,8 @@
 # Uranium is released under the terms of the LGPLv3 or higher.
 
 import pytest
-# QT application import is required, even though it isn't used.
-from UM.Qt.QtApplication import QtApplication
+import Arcus #Prevents error: "PyCapsule_GetPointer called with incorrect name" with conflicting SIP configurations between Arcus and PyQt: Import Arcus first!
+from UM.Qt.QtApplication import QtApplication # QT application import is required, even though it isn't used.
 from UM.Application import Application
 from UM.Signal import Signal
 
@@ -12,7 +12,7 @@ from UM.Signal import Signal
 class FixtureApplication(Application):
     def __init__(self):
         Application._Application__instance = None
-        super().__init__(name = "test", version = "1.0")
+        super().__init__(name = "test", version = "1.0", api_version = "5.0.0")
         super().initialize()
         Signal._signalQueue = self
 

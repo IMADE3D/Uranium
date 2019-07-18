@@ -1,9 +1,8 @@
-# Copyright (c) 2015 Ultimaker B.V.
+# Copyright (c) 2019 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
-import copy
-
 from UM.Logger import Logger
+from UM.Math.Matrix import Matrix
 
 from UM.Math.Vector import Vector
 
@@ -193,9 +192,10 @@ class RenderBatch():
         if self._state_setup_callback:
             self._state_setup_callback(self._gl)
 
-        self._view_matrix = camera.getWorldTransformation().getInverse()
+        self._view_matrix = camera.getWorldTransformation()
+        self._view_matrix.invert()
         self._projection_matrix = camera.getProjectionMatrix()
-        self._view_projection_matrix = camera.getProjectionMatrix().multiply(self._view_matrix)
+        self._view_projection_matrix = camera.getViewProjectionMatrix()
 
         self._shader.updateBindings(
             view_matrix = self._view_matrix,
@@ -233,13 +233,14 @@ class RenderBatch():
 
         normal_matrix = None
         if mesh.hasNormals():
-            normal_matrix = copy.deepcopy(transformation)
+            normal_matrix = Matrix(transformation.getData())
             normal_matrix.setRow(3, [0, 0, 0, 1])
             normal_matrix.setColumn(3, [0, 0, 0, 1])
-            normal_matrix = normal_matrix.getInverse().getTransposed()
+            normal_matrix.invert()
+            normal_matrix.transpose()
 
-        model_view_matrix = copy.deepcopy(transformation).preMultiply(self._view_matrix)
-        model_view_projection_matrix = copy.deepcopy(transformation).preMultiply(self._view_projection_matrix)
+        model_view_matrix = transformation.preMultiply(self._view_matrix, copy = True)
+        model_view_projection_matrix = transformation.preMultiply(self._view_projection_matrix, copy = True)
 
         self._shader.updateBindings(
             model_matrix = transformation,

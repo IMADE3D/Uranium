@@ -1,4 +1,4 @@
-# Copyright (c) 2015 Ultimaker B.V.
+# Copyright (c) 2018 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
 from PyQt5.QtCore import pyqtProperty, Qt, QCoreApplication, pyqtSignal, pyqtSlot, QMetaObject, QRectF
@@ -13,9 +13,6 @@ from UM.Signal import Signal, signalemitter
 
 from typing import Optional
 
-MYPY = False
-if MYPY:
-    pass
 
 ##  QQuickWindow subclass that provides the main window.
 @signalemitter
@@ -158,7 +155,7 @@ class MainWindow(QQuickWindow):
         self._mouse_x = event.x()
         self._mouse_y = event.y()
 
-        if self._mouse_pressed and self._app.getController().isModelRenderingEnabled():
+        if self._mouse_pressed:
             self.mousePositionChanged.emit()
 
         super().mouseMoveEvent(event)
@@ -230,14 +227,13 @@ class MainWindow(QQuickWindow):
 
     @pyqtSlot()
     def _onWindowGeometryChanged(self):
-        if self.windowState() == Qt.WindowNoState:
-            self._preferences.setValue("general/window_width", self.width())
-            self._preferences.setValue("general/window_height", self.height())
-            self._preferences.setValue("general/window_left", self.x())
-            self._preferences.setValue("general/window_top", self.y())
-            self._preferences.setValue("general/window_state", Qt.WindowNoState)
-        elif self.windowState() == Qt.WindowMaximized:
-            self._preferences.setValue("general/window_state", Qt.WindowMaximized)
+        self._preferences.setValue("general/window_width", self.width())
+        self._preferences.setValue("general/window_height", self.height())
+        self._preferences.setValue("general/window_left", self.x())
+        self._preferences.setValue("general/window_top", self.y())
+        # This is a workaround for QTBUG-30085
+        if self.windowState() in (Qt.WindowNoState, Qt.WindowMaximized):
+            self._preferences.setValue("general/window_state", self.windowState())
 
     def _updateViewportGeometry(self, width: int, height: int):
         view_width = width * self._viewport_rect.width()

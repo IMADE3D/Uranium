@@ -45,7 +45,7 @@ class DefinitionContainersModel(ListModel):
         definition_containers.sort(key = self._sortKey)
 
         for metadata in definition_containers:
-            metadata = metadata.copy()
+            metadata = dict(metadata) # For fully loaded definitions, the metadata is an OrderedDict which does not pass to QML correctly
 
             items.append({
                 "name": metadata["name"],
@@ -98,7 +98,7 @@ class DefinitionContainersModel(ListModel):
             result.append(section_value)
 
         result.append(int(item.get("weight", 0)))
-        result.append(item["name"])
+        result.append(item["name"].lower())
 
         return result
 

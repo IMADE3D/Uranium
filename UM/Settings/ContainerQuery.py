@@ -3,6 +3,7 @@
 
 import re
 from typing import Any, cast, Dict, Iterable, List, Optional, Type, TYPE_CHECKING
+from UM.Logger import Logger
 
 if TYPE_CHECKING:
     from UM.Settings.ContainerRegistry import ContainerRegistry
@@ -70,7 +71,10 @@ class ContainerQuery:
         # Filter on all the key-word arguments.
         for key, value in self._kwargs.items():
             if isinstance(value, str):
-                if ("*" or "|") in value:
+                if value.startswith("[") and value.endswith("]"):
+                    # With [token1|token2|token3|...], we try to find if any of the given tokens is present in the value
+                    key_filter = lambda candidate, key = key, value = value: self._matchRegMultipleTokens(candidate, key, value)
+                elif ("*" or "|") in value:
                     key_filter = lambda candidate, key = key, value = value: self._matchRegExp(candidate, key, value)
                 else:
                     key_filter = lambda candidate, key = key, value = value: self._matchString(candidate, key, value)
@@ -106,6 +110,19 @@ class ContainerQuery:
 
         return value_pattern.match(str(metadata[property_name]))
 
+    def _matchRegMultipleTokens(self, metadata: Dict[str, Any], property_name: str, value: str):
+        if property_name not in metadata:
+            return False
+
+        # Use pattern /^(token1|token2|token3|...)$/ to look for any match of the given tokens
+        value = "^" + value.replace("[", "(").replace("]", ")") + "$" #Match on any string and add anchors for a complete match.
+        if self._ignore_case:
+            value_pattern = re.compile(value, re.IGNORECASE)
+        else:
+            value_pattern = re.compile(value)
+
+        return value_pattern.match(str(metadata[property_name]))
+
     # Check to see if a container matches with a string
     def _matchString(self, metadata: Dict[str, Any], property_name: str, value: str) -> bool:
         if property_name not in metadata:
@@ -125,8 +142,11 @@ class ContainerQuery:
                     raise TypeError("The value {value} of the property {property} is not a type but a {type}: {metadata}"
                                     .format(value = value, property = property_name, type = type(value), metadata = metadata))
             else:
-                raise TypeError("Container type {container_type} is not a type but a {type}: {metadata}"
-                           .format(container_type = container_type, type = type(container_type), metadata = metadata))
+                # We attempted to match something that isn't a type.
+                Logger.log("w", "Container type {container_type} is not a type but a {type}: {metadata}"
+                           .format(container_type=container_type, type=type(container_type), metadata=metadata))
+                return False
+
         return value == metadata.get(property_name)  # If the metadata entry doesn't exist, match on None.
 
     # Helper function to simplify ignore case handling

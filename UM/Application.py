@@ -23,13 +23,9 @@ from UM.Preferences import Preferences
 from UM.View.Renderer import Renderer #For typing.
 from UM.OutputDevice.OutputDeviceManager import OutputDeviceManager
 from UM.i18n import i18nCatalog
+from UM.Version import Version
 
-try:
-    from UM.LibraryDir import UraniumLibraryDir
-except ImportError:
-    UraniumLibraryDir = "lib"
-
-from typing import TYPE_CHECKING, Dict, List, Callable, Any, Optional
+from typing import TYPE_CHECKING, List, Callable, Any, Optional
 if TYPE_CHECKING:
     from UM.Backend.Backend import Backend
     from UM.Settings.ContainerStack import ContainerStack
@@ -49,53 +45,63 @@ class Application:
     #   \param version \type{string} Version, formatted as major.minor.rev
     #   \param build_type Additional version info on the type of build this is, such as "master".
     #   \param is_debug_mode Whether to run in debug mode.
-    def __init__(self, name: str, version: str, build_type: str = "", is_debug_mode: bool = False, **kwargs) -> None:
+    def __init__(self, name: str, version: str, api_version: str, app_display_name: str = "", build_type: str = "", is_debug_mode: bool = False, **kwargs) -> None:
         if Application.__instance is not None:
             raise RuntimeError("Try to create singleton '%s' more than once" % self.__class__.__name__)
         Application.__instance = self
 
         super().__init__()  # Call super to make multiple inheritance work.
 
-        self._app_name = name #type: str
-        self._version = version #type: str
-        self._build_type = build_type #type: str
-        self._is_debug_mode = is_debug_mode #type: bool
-        self._is_headless = False #type: bool
-        self._use_external_backend = False #type: bool
+        self._api_version = Version(api_version)  # type: Version
 
-        self._config_lock_filename = "{name}.lock".format(name = self._app_name) # type: str
+        self._app_name = name  # type: str
+        self._app_display_name = app_display_name if app_display_name else name  # type: str
+        self._version = version  # type: str
+        self._build_type = build_type  # type: str
+        self._is_debug_mode = is_debug_mode  # type: bool
+        self._is_headless = False  # type: bool
+        self._use_external_backend = False  # type: bool
 
-        self._cli_args = None #type: argparse.Namespace
-        self._cli_parser = argparse.ArgumentParser(prog = self._app_name, add_help = False) #type: argparse.ArgumentParser
+        self._just_updated_from_old_version = False  # type: bool
 
-        self._main_thread = threading.current_thread() #type: threading.Thread
+        self._config_lock_filename = "{name}.lock".format(name = self._app_name)  # type: str
 
-        self.default_theme = self._app_name  #type: str # Default theme is the application name
-        self._default_language = "en_US" #type: str
+        self._cli_args = None  # type: argparse.Namespace
+        self._cli_parser = argparse.ArgumentParser(prog = self._app_name, add_help = False)  # type: argparse.ArgumentParser
 
-        self._preferences_filename = None #type: str
-        self._preferences = None #type: Preferences
+        self._main_thread = threading.current_thread()  # type: threading.Thread
 
-        self._extensions = [] #type: List[Extension]
-        self._required_plugins = [] #type: List[str]
+        self.default_theme = self._app_name  # type: str # Default theme is the application name
+        self._default_language = "en_US"  # type: str
+
+        self.change_log_url = "https://github.com/Ultimaker/Uranium"  # Where to find a more detailed description of the recent updates.
+
+        self._preferences_filename = None  # type: str
+        self._preferences = None  # type: Preferences
+
+        self._extensions = []  # type: List[Extension]
+        self._required_plugins = []  # type: List[str]
 
         self._package_manager_class = PackageManager  # type: type
         self._package_manager = None  # type: PackageManager
 
-        self._plugin_registry = None #type: PluginRegistry
-        self._container_registry_class = ContainerRegistry #type: type
-        self._container_registry = None #type: ContainerRegistry
-        self._global_container_stack = None #type: ContainerStack
+        self._plugin_registry = None  # type: PluginRegistry
+        self._container_registry_class = ContainerRegistry  # type: type
+        self._container_registry = None  # type: ContainerRegistry
+        self._global_container_stack = None  # type: ContainerStack
 
-        self._controller = None #type: Controller
-        self._backend = None #type: Backend
-        self._output_device_manager = None #type: OutputDeviceManager
-        self._operation_stack = None #type: OperationStack
+        self._controller = None  # type: Controller
+        self._backend = None  # type: Backend
+        self._output_device_manager = None  # type: OutputDeviceManager
+        self._operation_stack = None  # type: OperationStack
 
-        self._visible_messages = [] #type: List[Message]
-        self._message_lock = threading.Lock() #type: threading.Lock
+        self._visible_messages = []  # type: List[Message]
+        self._message_lock = threading.Lock()  # type: threading.Lock
 
-        self._app_install_dir = self.getInstallPrefix() #type: str
+        self._app_install_dir = self.getInstallPrefix()  # type: str
+
+    def getAPIVersion(self) -> "Version":
+        return self._api_version
 
     # Adds the command line options that can be parsed by the command line parser.
     # Can be overridden to add additional command line options to the parser.
@@ -164,7 +170,9 @@ class Application:
 
         self._plugin_registry = PluginRegistry(self)  #type: PluginRegistry
 
-        self._plugin_registry.addPluginLocation(os.path.join(self._app_install_dir, UraniumLibraryDir, "uranium"))
+        self._plugin_registry.addPluginLocation(os.path.join(self._app_install_dir, "lib", "uranium"))
+        self._plugin_registry.addPluginLocation(os.path.join(self._app_install_dir, "lib64", "uranium"))
+        self._plugin_registry.addPluginLocation(os.path.join(self._app_install_dir, "lib32", "uranium"))
         self._plugin_registry.addPluginLocation(os.path.join(os.path.dirname(sys.executable), "plugins"))
         self._plugin_registry.addPluginLocation(os.path.join(self._app_install_dir, "Resources", "uranium", "plugins"))
         self._plugin_registry.addPluginLocation(os.path.join(self._app_install_dir, "Resources", self._app_name, "plugins"))
@@ -185,19 +193,18 @@ class Application:
         UM.Settings.InstanceContainer.setContainerRegistry(self._container_registry)
         UM.Settings.ContainerStack.setContainerRegistry(self._container_registry)
 
-        # Initialize the package manager to remove and install scheduled packages.
-        self._package_manager = self._package_manager_class(self)
-
         self.showMessageSignal.connect(self.showMessage)
         self.hideMessageSignal.connect(self.hideMessage)
-
-        self.change_log_url = "https://github.com/Ultimaker/Uranium" #Where to find a more detailed description of the recent updates.
 
     def startSplashWindowPhase(self) -> None:
         pass
 
     def startPostSplashWindowPhase(self) -> None:
         pass
+
+    # Indicates if we have just updated from an older application version.
+    def hasJustUpdatedFromOldVersion(self) -> bool:
+        return self._just_updated_from_old_version
 
     ##  Run the main event loop.
     #   This method should be re-implemented by subclasses to start the main event loop.
@@ -229,8 +236,9 @@ class Application:
     workspaceLoaded = Signal()
 
     def setGlobalContainerStack(self, stack: "ContainerStack") -> None:
-        self._global_container_stack = stack
-        self.globalContainerStackChanged.emit()
+        if self._global_container_stack != stack:
+            self._global_container_stack = stack
+            self.globalContainerStackChanged.emit()
 
     def getGlobalContainerStack(self) -> Optional["ContainerStack"]:
         return self._global_container_stack
@@ -294,6 +302,9 @@ class Application:
     #   \returns app_name \type{string}
     def getApplicationName(self) -> str:
         return self._app_name
+
+    def getApplicationDisplayName(self) -> str:
+        return self._app_display_name
 
     ##  Get the preferences.
     #   \return preferences \type{Preferences}
@@ -390,9 +401,10 @@ class Application:
     @staticmethod
     def getInstallPrefix() -> str:
         if "python" in os.path.basename(sys.executable):
-            return os.path.abspath(os.path.join(os.path.dirname(sys.argv[0]), ".."))
+            executable = sys.argv[0]
         else:
-            return os.path.abspath(os.path.join(os.path.dirname(sys.executable), ".."))
+            executable = sys.executable
+        return os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(executable)), ".."))
 
     __instance = None   # type: Application
 

@@ -21,10 +21,6 @@ from UM.Platform import Platform
 
 i18n_catalog = i18nCatalog("uranium")
 
-MYPY = False
-if MYPY:
-    from UM.Scene.SceneNode import SceneNode
-
 
 ##  Container object for the scene graph
 #
@@ -32,10 +28,10 @@ if MYPY:
 @signalemitter
 class Scene:
     def __init__(self) -> None:
-        super().__init__()  # Call super to make multiple inheritance work.
+        super().__init__()
 
         from UM.Scene.SceneNode import SceneNode
-        self._root = SceneNode(name= "Root")
+        self._root = SceneNode(name = "Root")
         self._root.setCalculateBoundingBox(False)
         self._connectSignalsRoot()
         self._active_camera = None  # type: Optional[Camera]
@@ -45,6 +41,8 @@ class Scene:
         # Watching file for changes.
         self._file_watcher = QFileSystemWatcher()
         self._file_watcher.fileChanged.connect(self._onFileChanged)
+
+        self._reload_message = None  # type: Optional[Message]
 
     def _connectSignalsRoot(self) -> None:
         self._root.transformationChanged.connect(self.sceneChanged)
@@ -63,22 +61,6 @@ class Scene:
                 self._disconnectSignalsRoot()
             else:
                 self._connectSignalsRoot()
-
-    ##  Acquire the global scene lock.
-    #
-    #   This will prevent any read or write actions on the scene from other threads,
-    #   assuming those threads also properly acquire the lock. Most notably, this
-    #   prevents the rendering thread from rendering the scene while it is changing.
-    #   Deprecated, use getSceneLock() instead.
-    @deprecated("Please use the getSceneLock instead", "3.3")
-    def acquireLock(self) -> None:
-        self._lock.acquire()
-
-    ##  Release the global scene lock.
-    #   Deprecated, use getSceneLock() instead.
-    @deprecated("Please use the getSceneLock instead", "3.3")
-    def releaseLock(self) -> None:
-        self._lock.release()
 
     ##  Gets the global scene lock.
     #
@@ -110,7 +92,7 @@ class Scene:
 
     def getAllCameras(self) -> List[Camera]:
         cameras = []
-        for node in BreadthFirstIterator(self._root): #type: ignore
+        for node in BreadthFirstIterator(self._root):  # type: ignore
             if isinstance(node, Camera):
                 cameras.append(node)
         return cameras
@@ -124,7 +106,7 @@ class Scene:
         else:
             Logger.log("w", "Couldn't find camera with name [%s] to activate!" % name)
 
-    ##  Signal. Emitted whenever something in the scene changes.
+    ##  Signal that is emitted whenever something in the scene changes.
     #   \param object The object that triggered the change.
     sceneChanged = Signal()
 
@@ -134,13 +116,13 @@ class Scene:
     #
     #   \return The object if found, or None if not.
     def findObject(self, object_id: int) -> Optional["SceneNode"]:
-        for node in BreadthFirstIterator(self._root): #type: ignore
+        for node in BreadthFirstIterator(self._root):  # type: ignore
             if id(node) == object_id:
                 return node
         return None
 
     def findCamera(self, name: str) -> Optional[Camera]:
-        for node in BreadthFirstIterator(self._root): #type: ignore
+        for node in BreadthFirstIterator(self._root):  # type: ignore
             if isinstance(node, Camera) and node.getName() == name:
                 return node
         return None
@@ -161,17 +143,21 @@ class Scene:
 
     ##  Triggered whenever a file is changed that we currently have loaded.
     def _onFileChanged(self, file_path: str) -> None:
-        if not os.path.isfile(file_path) or os.path.getsize(file_path) == 0: #File doesn't exist any more, or it is empty
+        if not os.path.isfile(file_path) or os.path.getsize(file_path) == 0:  # File doesn't exist any more, or it is empty
             return
 
-        #Multiple nodes may be loaded from the same file at different stages. Reload them all.
-        from UM.Scene.Iterator.DepthFirstIterator import DepthFirstIterator #To find which nodes to reload when files have changed.
-        modified_nodes = [node for node in DepthFirstIterator(self.getRoot()) if node.getMeshData() and node.getMeshData().getFileName() == file_path] #type: ignore
+        # Multiple nodes may be loaded from the same file at different stages. Reload them all.
+        from UM.Scene.Iterator.DepthFirstIterator import DepthFirstIterator  # To find which nodes to reload when files have changed.
+        modified_nodes = [node for node in DepthFirstIterator(self.getRoot()) if node.getMeshData() and node.getMeshData().getFileName() == file_path]  # type: ignore
 
         if modified_nodes:
+            # Hide the message if it was already visible
+            if self._reload_message is not None:
+                self._reload_message.hide()
+
             self._reload_message = Message(i18n_catalog.i18nc("@info", "Would you like to reload {filename}?").format(filename = os.path.basename(file_path)),
                               title = i18n_catalog.i18nc("@info:title", "File has been modified"))
-            self._reload_message.addAction("reload", i18n_catalog.i18nc("@action:button", "Reload"), icon = None, description = i18n_catalog.i18nc("@action:description", "This will trigger the modified files to reload from disk."))
+            self._reload_message.addAction("reload", i18n_catalog.i18nc("@action:button", "Reload"), icon = "", description = i18n_catalog.i18nc("@action:description", "This will trigger the modified files to reload from disk."))
             self._reload_callback = functools.partial(self._reloadNodes, modified_nodes)
             self._reload_message.actionTriggered.connect(self._reload_callback)
             self._reload_message.show()
@@ -183,12 +169,13 @@ class Scene:
     def _reloadNodes(self, nodes: List["SceneNode"], message: str, action: str) -> None:
         if action != "reload":
             return
-        self._reload_message.hide()
+        if self._reload_message is not None:
+            self._reload_message.hide()
         for node in nodes:
             meshdata = node.getMeshData()
             if meshdata:
                 filename = meshdata.getFileName()
-                if not filename or not os.path.isfile(filename): #File doesn't exist any more.
+                if not filename or not os.path.isfile(filename):  # File doesn't exist any more.
                     continue
                 job = ReadMeshJob(filename)
                 self._reload_finished_callback = functools.partial(self._reloadJobFinished, node)

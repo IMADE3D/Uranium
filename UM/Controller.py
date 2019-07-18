@@ -32,7 +32,6 @@ class Controller:
 
         self._scene = Scene()
         self._application = application
-        self._is_model_rendering_enabled = True
 
         self._active_view = None  # type: Optional[View]
         self._views = {}  # type: Dict[str, View]
@@ -104,15 +103,6 @@ class Controller:
             Logger.log("e", "No view named %s found", name)
         except Exception as e:
             Logger.logException("e", "An exception occurred while switching views: %s", str(e))
-
-    def enableModelRendering(self) -> None:
-        self._is_model_rendering_enabled = True
-
-    def disableModelRendering(self) -> None:
-        self._is_model_rendering_enabled = False
-
-    def isModelRenderingEnabled(self) -> bool:
-        return self._is_model_rendering_enabled
 
     ##  Emitted when the list of views changes.
     viewsChanged = Signal()
@@ -311,11 +301,16 @@ class Controller:
 
     ##  Process an event
     #   \param event \type{Event} event to be handle.
-    #   The event is first passed to the camera tool, then active tool and finally selection tool.
+    #   The event is first passed to the selection tool, then the active tool and finally the camera tool.
     #   If none of these events handle it (when they return something that does not evaluate to true)
     #   a context menu signal is emitted.
     def event(self, event: Event):
-        # First, try to perform camera control
+        if self._selection_tool and self._selection_tool.event(event):
+            return
+
+        if self._active_tool and self._active_tool.event(event):
+            return
+
         if self._camera_tool and self._camera_tool.event(event):
             return
 
@@ -326,13 +321,6 @@ class Controller:
                 for key, tool in self._tools.items():
                     if tool.getShortcutKey() is not None and event.key == tool.getShortcutKey():
                         self.setActiveTool(tool)
-
-        if self._selection_tool and self._selection_tool.event(event):
-            return
-
-        # If we are not doing camera control, pass the event to the active tool.
-        if self._active_tool and self._active_tool.event(event):
-            return
 
         if self._active_view:
             self._active_view.event(event)

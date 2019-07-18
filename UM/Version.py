@@ -1,7 +1,8 @@
 # Copyright (c) 2018 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 import re  # To replace parts of version strings with regex.
-from typing import cast, Union
+from typing import cast, Union, List
+from UM.Logger import Logger
 
 
 ##  Represents a version number, like "3.2.8" and allows comparison of those
@@ -14,7 +15,7 @@ class Version:
     #   the major, minor and revision version numbers. All text is ignored.
     #
     #   \param version A string or bytes representing a version number.
-    def __init__(self, version: Union[str, bytes]) -> None:
+    def __init__(self, version: Union[str, bytes, int, "Version", List[Union[int, str, bytes]]]) -> None:
         super().__init__()
 
         if type(version) == bytes:
@@ -29,10 +30,15 @@ class Version:
             version = version.replace("_", ".")
             version = version.replace("\"", "")
             version = re.sub(r"[A-Z]+", "", version)
-            version_list = version.split(".")
+            version_list = version.split(".")  # type: ignore
         elif isinstance(version, list):
-            version_list = version
+            version_list = version  # type: ignore
+        elif isinstance(version, int):
+            version_list = [version]  # type: ignore
+        elif isinstance(version, Version):
+            version_list = [version.getMajor(), version.getMinor(), version.getRevision(), version.getPostfixType(), version.getPostfixVersion()]  # type: ignore
         else:
+            Logger.log("w", "Unable to convert version %s of type %s into a usable version", version, type(version))
             version_list = []
 
         self._major = 0

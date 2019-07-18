@@ -6,7 +6,7 @@ import warnings
 import inspect
 
 from UM.Logger import Logger
-
+import time
 
 ##  Decorator that can be used to indicate a method has been deprecated
 #
@@ -16,7 +16,7 @@ def deprecated(message, since = "Unknown"): #pylint: disable=bad-whitespace
     def deprecated_decorator(function):
         def deprecated_function(*args, **kwargs):
             warning = "{0} is deprecated (since {1}): {2}".format(function, since, message)
-            Logger.log("w", warning)
+            Logger.log("w_once", warning)
             warnings.warn(warning, DeprecationWarning, stacklevel=2)
             return function(*args, **kwargs)
         return deprecated_function
@@ -109,3 +109,19 @@ def immutable(cls):
 
 def sameSignature(a: inspect.Signature, b: inspect.Signature) -> bool:
     return len(a.parameters) == len(b.parameters)
+
+
+def timeit(method):
+    def timed(*args, **kw):
+        ts = time.time()
+        result = method(*args, **kw)
+        te = time.time()
+
+        if "log_time" in kw:
+            name = kw.get("log_name", method.__name__.upper())
+            kw["log_time"][name] = int((te - ts) * 1000)
+        else:
+            print("Function %r took %2.2f ms" % (method.__name__, (te - ts) * 1000))
+        return result
+
+    return timed

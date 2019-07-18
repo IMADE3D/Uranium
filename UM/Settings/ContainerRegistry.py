@@ -167,7 +167,7 @@ class ContainerRegistry(ContainerRegistryInterface):
     #   list if nothing was found.
     @UM.FlameProfiler.profile
     def findContainers(self, *, ignore_case: bool = False, **kwargs: Any) -> List[ContainerInterface]:
-         # Find the metadata of the containers and grab the actual containers from there.
+        # Find the metadata of the containers and grab the actual containers from there.
         results_metadata = self.findContainersMetadata(ignore_case = ignore_case, **kwargs)
         result = []
         for metadata in results_metadata:
@@ -222,7 +222,7 @@ class ContainerRegistry(ContainerRegistryInterface):
                     Logger.log("w", "Metadata of container {container_id} is missing even though the container is added during run-time.")
                     return []
                 metadata = provider.loadMetadata(kwargs["id"])
-                if metadata is None or metadata["id"] in self._wrong_container_ids:
+                if metadata is None or metadata.get("id", "") in self._wrong_container_ids or "id" not in metadata:
                     return []
                 self.metadata[metadata["id"]] = metadata
                 self.source_provider[metadata["id"]] = provider
@@ -302,6 +302,14 @@ class ContainerRegistry(ContainerRegistryInterface):
             return False  # If no provider had the container, that means that the container was only in memory. Then it's always modifiable.
         return provider.isReadOnly(container_id)
 
+    # Gets the container file path with for the container with the given ID. Returns None if the container/file doesn't
+    # exist.
+    def getContainerFilePathById(self, container_id: str) -> Optional[str]:
+        provider = self.source_provider.get(container_id)
+        if not provider:
+            return None
+        return provider.getContainerFilePathById(container_id)
+
     ##  Returns whether a container is completely loaded or not.
     #
     #   If only its metadata is known, it is not yet completely loaded.
@@ -313,15 +321,23 @@ class ContainerRegistry(ContainerRegistryInterface):
     ##  Load the metadata of all available definition containers, instance
     #   containers and container stacks.
     def loadAllMetadata(self) -> None:
+        self._clearQueryCache()
+        gc.disable()
+        resource_start_time = time.time()
         for provider in self._providers:  # Automatically sorted by the priority queue.
             for container_id in list(provider.getAllIds()):  # Make copy of all IDs since it might change during iteration.
                 if container_id not in self.metadata:
                     self._application.processEvents()  # Update the user interface because loading takes a while. Specifically the loading screen.
                     metadata = provider.loadMetadata(container_id)
-                    if metadata is None:
+                    if not self._isMetadataValid(metadata):
+                        Logger.log("w", "Invalid metadata for container {container_id}: {metadata}".format(container_id = container_id, metadata = metadata))
+                        if container_id in self.metadata:
+                            del self.metadata[container_id]
                         continue
                     self.metadata[container_id] = metadata
                     self.source_provider[container_id] = provider
+        Logger.log("d", "Loading metadata into container registry took %s seconds", time.time() - resource_start_time)
+        gc.enable()
         ContainerRegistry.allMetadataLoaded.emit()
 
     ##  Load all available definition containers, instance containers and
@@ -368,8 +384,14 @@ class ContainerRegistry(ContainerRegistryInterface):
         if container_id not in self.source_provider:
             self.source_provider[container_id] = None #Added during runtime.
         self._clearQueryCacheByContainer(container)
-        self.containerAdded.emit(container)
         Logger.log("d", "Container [%s] added.", container_id)
+
+        # containerAdded is a custom signal and can trigger direct calls to its subscribers. This should be avoided
+        # because with the direct calls, the subscribers need to know everything about what it tries to do to avoid
+        # triggering this signal again, which eventually can end up exceeding the max recursion limit.
+        # We avoid the direct calls here to make sure that the subscribers do not need to take into account any max
+        # recursion problem.
+        self._application.callLater(self.containerAdded.emit, container)
 
     @UM.FlameProfiler.profile
     def removeContainer(self, container_id: str) -> None:
@@ -379,6 +401,16 @@ class ContainerRegistry(ContainerRegistryInterface):
             Logger.log("w", "Tried to delete container {container_id}, which doesn't exist or isn't loaded.".format(container_id = container_id))
             return  # Ignore.
 
+        # CURA-6237
+        # Do not try to operate on invalid containers because removeContainer() needs to load it if it's not loaded yet
+        # (see below), but an invalid container cannot be loaded.
+        if container_id in self._wrong_container_ids:
+            Logger.log("w", "Container [%s] is faulty, it won't be able to be loaded, so no need to remove, skip.")
+            # delete the metadata if present
+            if container_id in self.metadata:
+                del self.metadata[container_id]
+            return
+
         container = None
         if container_id in self._containers:
             container = self._containers[container_id]
@@ -386,6 +418,14 @@ class ContainerRegistry(ContainerRegistryInterface):
                 container.metaDataChanged.disconnect(self._onContainerMetaDataChanged)
             del self._containers[container_id]
         if container_id in self.metadata:
+            if container is None:
+                # We're in a bit of a weird state now. We want to notify the rest of the code that the container
+                # has been deleted, but due to lazy loading, it hasnt even been loaded yet. The issues is that in order
+                # to notify the rest of the code, we need to actually *have* the container. So we need to load it
+                # in order to remove it...
+                provider = self.source_provider.get(container_id)
+                if provider:
+                    container = provider.loadContainer(container_id)
             del self.metadata[container_id]
         if container_id in self.source_provider:
             if self.source_provider[container_id] is not None:
@@ -533,7 +573,7 @@ class ContainerRegistry(ContainerRegistryInterface):
         with self.lockFile():
             # Save base files first
             for instance in self.findDirtyContainers(container_type = InstanceContainer):
-                if instance.getMetaDataEntry("removed") is True:
+                if instance.getMetaDataEntry("removed"):
                     continue
                 if instance.getId() == instance.getMetaData().get("base_file"):
                     self.saveContainer(instance)
@@ -622,8 +662,18 @@ class ContainerRegistry(ContainerRegistryInterface):
     #   that doesn't work automatically between pyqtSignal and UM.Signal.
     def _onContainerMetaDataChanged(self, *args: ContainerInterface, **kwargs: Any) -> None:
         container = args[0]
+        # Always emit containerMetaDataChanged, even if the dictionary didn't actually change: The contents of the dictionary might have changed in-place!
         self.metadata[container.getId()] = container.getMetaData()  # refresh the metadata
         self.containerMetaDataChanged.emit(*args, **kwargs)
+
+    ##  Validate a metadata object.
+    #
+    #   If the metadata is invalid, the container is not allowed to be in the
+    #   registry.
+    #   \param metadata A metadata object.
+    #   \return Whether this metadata was valid.
+    def _isMetadataValid(self, metadata: Optional[Dict[str, Any]]) -> bool:
+        return metadata is not None
 
     ##  Get the lock filename including full path
     #   Dependent on when you call this function, Resources.getConfigStoragePath may return different paths

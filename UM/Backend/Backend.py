@@ -45,12 +45,19 @@ class Backend(PluginObject):
         self._backend_log = []
         self._backend_log_max_lines = None
 
+        self._backend_state = BackendState.NotStarted
+
         UM.Application.Application.getInstance().callLater(self._createSocket)
 
     processingProgress = Signal()
     backendStateChange = Signal()
     backendConnected = Signal()
     backendQuit = Signal()
+
+    def setState(self, new_state):
+        if new_state != self._backend_state:
+            self._backend_state = new_state
+            self.backendStateChange.emit(self._backend_state)
 
     ##   \brief Start the backend / engine.
     #   Runs the engine, this is only called when the socket is fully opened & ready to accept connections
@@ -101,30 +108,6 @@ class Backend(PluginObject):
             while len(self._backend_log) >= self._backend_log_max_lines:
                 del(self._backend_log[0])
         return self._backend_log
-
-    ##  \brief Convert byte array containing 3 floats per vertex
-    def convertBytesToVerticeList(self, data):
-        result = []
-        if not (len(data) % 12):
-            if data is not None:
-                for index in range(0, int(len(data) / 12)):  # For each 12 bits (3 floats)
-                    result.append(struct.unpack("fff", data[index * 12: index * 12 + 12]))
-                return result
-        else:
-            Logger.log("e", "Data length was incorrect for requested type")
-            return None
-    
-    ##  \brief Convert byte array containing 6 floats per vertex
-    def convertBytesToVerticeWithNormalsList(self,data):
-        result = []
-        if not (len(data) % 24):
-            if data is not None:
-                for index in range(0,int(len(data)/24)):  # For each 24 bits (6 floats)
-                    result.append(struct.unpack("ffffff", data[index * 24: index * 24 + 24]))
-                return result
-        else:
-            Logger.log("e", "Data length was incorrect for requested type")
-            return None
     
     ##  Get the command used to start the backend executable 
     def getEngineCommand(self):
@@ -145,11 +128,17 @@ class Backend(PluginObject):
             Logger.log("e", "Couldn't start back-end: No permission to execute process.")
         except FileNotFoundError:
             Logger.logException("e", "Unable to find backend executable: %s", command_list[0])
+        except BlockingIOError:
+            Logger.log("e", "Couldn't start back-end: Resource is temporarily unavailable")
         return None
 
     def _storeOutputToLogThread(self, handle):
         while True:
-            line = handle.readline()
+            try:
+                line = handle.readline()
+            except OSError:
+                Logger.logException("w", "Exception handling stdout log from backend.")
+                continue
             if line == b"":
                 self.backendQuit.emit()
                 break
@@ -157,7 +146,11 @@ class Backend(PluginObject):
 
     def _storeStderrToLogThread(self, handle):
         while True:
-            line = handle.readline()
+            try:
+                line = handle.readline()
+            except OSError:
+                Logger.logException("w", "Exception handling stderr log from backend.")
+                continue
             if line == b"":
                 break
             self._backendLog(line)

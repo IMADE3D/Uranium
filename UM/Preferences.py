@@ -30,13 +30,16 @@ class Preferences:
     def __init__(self) -> None:
         super().__init__()
 
-        self._parser = None #type: Optional[configparser.ConfigParser]
-        self._preferences = {} #type: Dict[str, Any]
+        self._parser = None  # type: Optional[configparser.ConfigParser]
+        self._preferences = {}  # type: Dict[str, Dict[str, _Preference]]
 
+    ##  Add a new preference to the list. If the preference was already added, it's default is set to whatever is provided
     def addPreference(self, key: str, default_value: Any) -> None:
+        if key.count("/") != 1:
+            raise Exception("Preferences must be in the [CATEGORY]/[KEY] format")
         preference = self._findPreference(key)
         if preference:
-            preference.setDefault(default_value)
+            self.setDefault(key, default_value)
             return
 
         group, key = self._splitKey(key)
@@ -64,7 +67,7 @@ class Preferences:
     #   \param default_value The new default value of the preference.
     def setDefault(self, key: str, default_value: Any) -> None:
         preference = self._findPreference(key)
-        if not preference: #Key not found.
+        if not preference:  # Key not found.
             Logger.log("w", "Tried to set the default value of non-existing setting %s.", key)
             return
         if preference.getValue() == preference.getDefault():
@@ -73,10 +76,10 @@ class Preferences:
 
     def setValue(self, key: str, value: Any) -> None:
         preference = self._findPreference(key)
-
         if preference:
-            preference.setValue(value)
-            self.preferenceChanged.emit(key)
+            if preference.getValue() != value:
+                preference.setValue(value)
+                self.preferenceChanged.emit(key)
         else:
             Logger.log("w", "Tried to set the value of non-existing setting %s.", key)
 
@@ -98,12 +101,14 @@ class Preferences:
         preference = self._findPreference(key)
 
         if preference:
-            preference.setValue(preference.getDefault())
-            self.preferenceChanged.emit(key)
+            if preference.getValue() != preference.getDefault():
+                preference.setValue(preference.getDefault())
+                self.preferenceChanged.emit(key)
+        else:
+            Logger.log("w", "Tried to reset unknown setting %s", key)
 
     def readFromFile(self, file: Union[str, IO[str]]) -> None:
         self._loadFile(file)
-
         self.__initializeSettings()
 
     def __initializeSettings(self) -> None:
@@ -155,7 +160,7 @@ class Preferences:
             group = parts[0]
             key = parts[1]
 
-        return (group, key)
+        return group, key
 
     def _findPreference(self, key: str) -> Optional[Any]:
         group, key = self._splitKey(key)
@@ -188,8 +193,13 @@ class Preferences:
     ##  Extract data from string and store it in the Configuration parser.
     def deserialize(self, serialized: str) -> None:
         updated_preferences = self.__updateSerialized(serialized)
-        self._parser = configparser.ConfigParser(interpolation=None)
-        self._parser.read_string(updated_preferences)
+        self._parser = configparser.ConfigParser(interpolation = None)
+        try:
+            self._parser.read_string(updated_preferences)
+        except configparser.MissingSectionHeaderError:
+            Logger.log("w", "Could not deserialize preferences from loaded project")
+            self._parser = None
+            return
         has_version = "general" in self._parser and "version" in self._parser["general"]
 
         if has_version:
@@ -213,20 +223,20 @@ class Preferences:
                 result = VersionUpgradeManager.getInstance().updateFilesData(configuration_type, version, [serialized], [""])
                 if result is not None:
                     serialized = result.files_data[0]
-        except Exception:
-            Logger.logException("d", "An exception occured while trying to update the preferences")
+        except:
+            Logger.logException("d", "An exception occurred while trying to update the preferences.")
         return serialized
 
     ##  This method is still used by some external plugins and it needs to be kept as deprecated
     @classmethod
-    @deprecated("Please use the getPreferences function in Application", "3.3")
+    @deprecated("Please use Application.getInstance().getPreferences() instead", "3.3")
     def getInstance(cls) -> "Preferences":
         from UM.Application import Application
         return Application.getInstance().getPreferences()
 
 
 class _Preference:
-    def __init__(self, name: str, default: Any = None, value: Any = None) -> None: #pylint: disable=bad-whitespace
+    def __init__(self, name: str, default: Any = None, value: Any = None) -> None:
         self._name = name
         self._default = default
         self._value = default if value is None else value

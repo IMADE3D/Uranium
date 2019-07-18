@@ -17,7 +17,7 @@ import traceback
 import functools
 
 from UM.Event import CallFunctionEvent
-from UM.Decorators import deprecated, call_if_enabled
+from UM.Decorators import call_if_enabled
 from UM.Logger import Logger
 from UM.Platform import Platform
 from UM import FlameProfiler
@@ -341,8 +341,9 @@ class Signal:
     #     return "Signal<{}> {{ __functions={{ {} }}, __methods={{ {} }}, __signals={{ {} }} }}".format(id(self), function_str, method_str, signal_str)
 
 
-def strMethodSet(method_set):
-    return "{" + ", ".join([str(m) for m in method_set]) + "}"
+#def strMethodSet(method_set):
+#    return "{" + ", ".join([str(m) for m in method_set]) + "}"
+
 
 class CompressTechnique(enum.Enum):
     NoCompression = 0
@@ -400,25 +401,6 @@ def postponeSignals(*signals, compress: CompressTechnique = CompressTechnique.No
         signal._compress_postpone = False
 
 
-##  Convenience class to simplify signal creation.
-#
-#   This class is a Convenience class to simplify signal creation. Since signals
-#   need to be instance variables, normally you would need to create all signals
-#   in the class" `__init__` method. However, this makes them rather awkward to
-#   document. This class instead makes it possible to declare them as class variables,
-#   which makes documenting them near the function they are used possible.
-#   During the call to `__init__()`, this class will then search through all the
-#   properties of the instance and create instance variables for each class variable
-#   that is an instance of Signal.
-class SignalEmitter:
-    ##  Initialize method.
-    @deprecated("Please use the new @signalemitter decorator", "2.2")
-    def __init__(self, **kwargs):
-        super().__init__()
-        for name, signal in inspect.getmembers(self, lambda i: isinstance(i, Signal)):
-            setattr(self, name, Signal(type = signal.getType())) #pylint: disable=bad-whitespace
-
-
 ##  Class decorator that ensures a class has unique instances of signals.
 #
 #   Since signals need to be instance variables, normally you would need to create all
@@ -448,6 +430,7 @@ def signalemitter(cls):
 
     cls.__new__ = new_new
     return cls
+
 
 T = TypeVar('T')
 
@@ -576,4 +559,4 @@ class WeakImmutablePairListIterator:
             left = pair[0]()
             right = pair[1]()
 
-        return (left, right)
+        return left, right

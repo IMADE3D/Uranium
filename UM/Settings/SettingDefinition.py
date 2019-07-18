@@ -51,6 +51,14 @@ def _toFloatConversion(value: str) -> float:
     except:
         return 0
 
+##  Conversion from string to integer.
+#
+#   \param value The string representation of an integer.
+def _toIntConversion(value):
+    try:
+        return ast.literal_eval(value)
+    except SyntaxError:
+        return 0
 
 ##  Defines a single Setting with its properties.
 #
@@ -79,7 +87,7 @@ class SettingDefinition:
     #   \param i18n_catalog \type{i18nCatalog} The translation catalog to use for this setting. Defaults to None.
     def __init__(self, key: str, container: Optional[DefinitionContainerInterface] = None, parent: Optional["SettingDefinition"] = None, i18n_catalog: Optional[i18nCatalog] = None) -> None:
         super().__init__()
-
+        self._all_keys = set()  # type: Set[str]
         self._key = key  # type: str
         self._container = container # type: Optional[DefinitionContainerInterface]
         self._parent = parent   # type:  Optional["SettingDefinition"]
@@ -127,6 +135,11 @@ class SettingDefinition:
     #   behaviour doesn't combine well with a non-default __getattr__.
     def __setstate__(self, state):
         self.__dict__.update(state)
+        # For 4.0 we added the _all_keys property, but the pickling fails to restore this.
+        # This is just there to prevent issues for developers, since only releases ignore caches.
+        # If you're reading this after that. Remove this.
+        if not hasattr(self, "_all_keys"):
+            self._all_keys = set()
 
     ##  The key of this setting.
     #
@@ -173,17 +186,19 @@ class SettingDefinition:
     #
     #   \return A set of the key in this definition and all its descendants.
     def getAllKeys(self) -> Set[str]:
-        keys = set()
-        keys.add(self.key)
-        for child in self.children:
-            keys |= child.getAllKeys() #Recursively get all keys of all descendants.
-        return keys
+        if not self._all_keys:
+            # It was reset, re-calculate them
+            self._all_keys = set()
+            self._all_keys.add(self.key)
+            for child in self.children:
+                self._all_keys |= child.getAllKeys()  # Recursively get all keys of all descendants.
+        return self._all_keys
 
     ##  Serialize this setting to a dict.
     #
     #   \return \type{dict} A representation of this setting definition.
     def serialize_to_dict(self) -> Dict[str, Any]:
-        result = {}     # type: Dict[str, Any]
+        result = {}  # type: Dict[str, Any]
         result["label"] = self.key
 
         result["children"] = {}
@@ -575,7 +590,7 @@ class SettingDefinition:
 
     def _updateDescendants(self, definition: "SettingDefinition" = None) -> Dict[str, "SettingDefinition"]:
         result = {}
-
+        self._all_keys = set()  # Reset the keys cache.
         if not definition:
             definition = self
 
@@ -617,36 +632,10 @@ class SettingDefinition:
         # A dictionary of key-value pairs that provide the options for an enum type setting. The key is the actual value, the value is a translated display string.
         "options": {"type": DefinitionPropertyType.Any, "required": False, "read_only": True, "default": {}, "depends_on" : None},
         # Optional comments that apply to the setting. Will be ignored.
-        "comments": {"type": DefinitionPropertyType.String, "required": False, "read_only": True, "default": "", "depends_on" : None}
+        "comments": {"type": DefinitionPropertyType.String, "required": False, "read_only": True, "default": "", "depends_on" : None},
+        # Indicates if this string setting is allowed to have empty value. This can only be used for string settings.
+        "allow_empty": {"type": DefinitionPropertyType.Function, "required": False, "read_only": True, "default": True, "depends_on": None},
     }   # type: Dict[str, Dict[str, Any]]
-
-    ##  Conversion from string to integer.
-    #
-    #   \param value The string representation of an integer.
-    def _toIntConversion(value):
-        try:
-            return ast.literal_eval(value)
-        except SyntaxError:
-            return 0
-
-    ## Conversion of string to float.
-    def _toFloatConversion(value):
-        ## Ensure that all , are replaced with . (so they are seen as floats)
-        value = value.replace(",", ".")
-
-        def stripLeading0(matchobj):
-            return matchobj.group(0).lstrip("0")
-
-        ## Literal eval does not like "02" as a value, but users see this as "2".
-        ## We therefore look numbers with leading "0", provided they are not used in variable names
-        ## example: "test02 * 20" should not be changed, but "test * 02 * 20" should be changed (into "test * 2 * 20")
-        regex_pattern = '(?<!\.|\w|\d)0+(\d+)'
-        value = re.sub(regex_pattern, stripLeading0 ,value)
-
-        try:
-            return ast.literal_eval(value)
-        except:
-            return 0
 
     __type_definitions = {
         # An integer value
@@ -656,7 +645,7 @@ class SettingDefinition:
         # Special case setting; Doesn't have a value. Display purposes only.
         "category": {"from": None, "to": None, "validator": None},
         # A string value
-        "str": {"from": None, "to": None, "validator": None},
+        "str": {"from": None, "to": None, "validator": Validator},
         # An enumeration
         "enum": {"from": None, "to": None, "validator": None},
         # A floating point value

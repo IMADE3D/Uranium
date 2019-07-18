@@ -1,24 +1,20 @@
-# Copyright (c) 2015 Ultimaker B.V.
+# Copyright (c) 2019 Ultimaker B.V.
 # Uranium is released under the terms of the LGPLv3 or higher.
 
+from PyQt5.QtCore import Qt
 import time
+from typing import cast, List, Optional, Union
 
-from UM.Benchmark import Benchmark
-from UM.Tool import Tool
 from UM.Event import Event, MouseEvent, KeyEvent
-
 from UM.Math.Plane import Plane
 from UM.Math.Vector import Vector
 from UM.Math.Float import Float
-
 from UM.Operations.TranslateOperation import TranslateOperation
 from UM.Operations.GroupedOperation import GroupedOperation
-
 from UM.Scene.SceneNodeSettings import SceneNodeSettings
 from UM.Scene.Selection import Selection
 from UM.Scene.ToolHandle import ToolHandle
-
-from PyQt5.QtCore import Qt
+from UM.Tool import Tool
 
 from . import TranslateToolHandle
 
@@ -26,16 +22,14 @@ from . import TranslateToolHandle
 DIMENSION_TOLERANCE = 0.0001  # Tolerance value used for comparing dimensions from the UI.
 DIRECTION_TOLERANCE = 0.0001  # Used to check if you're perpendicular on some axis
 
-##  Provides the tool to move meshes and groups
+##  Provides the tool to move meshes and groups.
 #
-#   The tool exposes a ToolHint to show the distance of the current operation
-
-
+#   The tool exposes a ToolHint to show the distance of the current operation.
 class TranslateTool(Tool):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
-        self._handle = TranslateToolHandle.TranslateToolHandle()
+        self._handle = TranslateToolHandle.TranslateToolHandle() #type: TranslateToolHandle.TranslateToolHandle #Because for some reason MyPy thinks this variable contains Optional[ToolHandle].
         self._enabled_axis = [ToolHandle.XAxis, ToolHandle.YAxis, ToolHandle.ZAxis]
 
         self._grid_snap = False
@@ -44,31 +38,29 @@ class TranslateTool(Tool):
 
         self._shortcut_key = Qt.Key_T
 
-        self._distance_update_time = None
-        self._distance = None
+        self._distance_update_time = None #type: Optional[float]
+        self._distance = None #type: Optional[Vector]
 
         self.setExposedProperties("ToolHint",
-                                  "X",
-                                  "Y",
-                                  "Z",
+                                  "X", "Y", "Z",
                                   SceneNodeSettings.LockPosition)
 
         # Ensure that the properties (X, Y & Z) are updated whenever the selection center is changed.
         Selection.selectionCenterChanged.connect(self.propertyChanged)
 
+        # CURA-5966 Make sure to render whenever objects get selected/deselected.
+        Selection.selectionChanged.connect(self.propertyChanged)
 
-    ##  Get the x-location of the selection bounding box center
-    #
-    #   \param x type(float) location in mm
-    def getX(self):
+    ##  Get the x-location of the selection bounding box center.
+    #   \return X location in mm.
+    def getX(self) -> float:
         if Selection.hasSelection():
             return float(Selection.getBoundingBox().center.x)
         return 0.0
 
-    ##  Get the y-location of the selection bounding box center
-    #
-    #   \param y type(float) location in mm
-    def getY(self):
+    ##  Get the y-location of the selection bounding box center.
+    #   \return Y location in mm.
+    def getY(self) -> float:
         if Selection.hasSelection():
             # Note; The switching of z & y is intentional. We display z as up for the user,
             # But store the data in openGL space.
@@ -76,10 +68,10 @@ class TranslateTool(Tool):
         return 0.0
 
     ##  Get the z-location of the selection bounding box bottom
-    #   The bottom is used as opposed to the center, because the biggest usecase is to push the selection into the buildplate
-    #
-    #   \param z type(float) location in mm
-    def getZ(self):
+    #   The bottom is used as opposed to the center, because the biggest use
+    #   case is to push the selection into the build plate.
+    #   \return Z location in mm.
+    def getZ(self) -> float:
         # We want to display based on the bottom instead of the actual coordinate.
         if Selection.hasSelection():
             # Note; The switching of z & y is intentional. We display z as up for the user,
@@ -87,113 +79,130 @@ class TranslateTool(Tool):
             return float(Selection.getBoundingBox().bottom)
         return 0.0
 
-    def _parseInt(self, str_value):
+    def _parseInt(self, str_value: str) -> float:
         try:
             parsed_value = float(str_value)
         except ValueError:
             parsed_value = float(0)
         return parsed_value
 
-    ##  Set the x-location of the selected object(s) by translating relative to the selection bounding box center
-    #
-    #   \param x type(float) location in mm
-    def setX(self, x):
-        Benchmark.start("Moving object in X from {start} to {end}".format(start = self.getX(), end = x))
+    ##  Set the x-location of the selected object(s) by translating relative to
+    #   the selection bounding box center.
+    #   \param x Location in mm.
+    def setX(self, x: str) -> None:
         parsed_x = self._parseInt(x)
         bounding_box = Selection.getBoundingBox()
 
-        op = GroupedOperation()
         if not Float.fuzzyCompare(parsed_x, float(bounding_box.center.x), DIMENSION_TOLERANCE):
-            for selected_node in self._getSelectedObjectsWithoutSelectedAncestors():
-                world_position = selected_node.getWorldPosition()
-                new_position = world_position.set(x=parsed_x + (world_position.x - bounding_box.center.x))
-                node_op = TranslateOperation(selected_node, new_position, set_position = True)
-                op.addOperation(node_op)
-            op.push()
+            selected_nodes = self._getSelectedObjectsWithoutSelectedAncestors()
+            if len(selected_nodes) > 1:
+                op = GroupedOperation()
+                for selected_node in self._getSelectedObjectsWithoutSelectedAncestors():
+                    world_position = selected_node.getWorldPosition()
+                    new_position = world_position.set(x = parsed_x + (world_position.x - bounding_box.center.x))
+                    node_op = TranslateOperation(selected_node, new_position, set_position = True)
+                    op.addOperation(node_op)
+                op.push()
+            else:
+                for selected_node in self._getSelectedObjectsWithoutSelectedAncestors():
+                    world_position = selected_node.getWorldPosition()
+                    new_position = world_position.set(x = parsed_x + (world_position.x - bounding_box.center.x))
+                    TranslateOperation(selected_node, new_position, set_position = True).push()
+
         self._controller.toolOperationStopped.emit(self)
 
-    ##  Set the y-location of the selected object(s) by translating relative to the selection bounding box center
-    #
-    #   \param y type(float) location in mm
-    def setY(self, y):
-        Benchmark.start("Moving object in Y from {start} to {end}".format(start = self.getY(), end = y))
+    ##  Set the y-location of the selected object(s) by translating relative to
+    #   the selection bounding box center.
+    #   \param y Location in mm.
+    def setY(self, y: str) -> None:
         parsed_y = self._parseInt(y)
         bounding_box = Selection.getBoundingBox()
 
-        op = GroupedOperation()
         if not Float.fuzzyCompare(parsed_y, float(bounding_box.center.z), DIMENSION_TOLERANCE):
-            for selected_node in self._getSelectedObjectsWithoutSelectedAncestors():
-                # Note; The switching of z & y is intentional. We display z as up for the user,
-                # But store the data in openGL space.
-                world_position = selected_node.getWorldPosition()
-                new_position = world_position.set(z=parsed_y + (world_position.z - bounding_box.center.z))
+            selected_nodes = self._getSelectedObjectsWithoutSelectedAncestors()
+            if len(selected_nodes) > 1:
+                op = GroupedOperation()
+                for selected_node in selected_nodes:
+                    # Note; The switching of z & y is intentional. We display z as up for the user,
+                    # But store the data in openGL space.
+                    world_position = selected_node.getWorldPosition()
+                    new_position = world_position.set(z = parsed_y + (world_position.z - bounding_box.center.z))
+                    node_op = TranslateOperation(selected_node, new_position, set_position = True)
+                    op.addOperation(node_op)
+                op.push()
+            else:
+                for selected_node in selected_nodes:
+                    world_position = selected_node.getWorldPosition()
+                    new_position = world_position.set(z = parsed_y + (world_position.z - bounding_box.center.z))
+                    TranslateOperation(selected_node, new_position, set_position = True).push()
 
-                node_op = TranslateOperation(selected_node, new_position, set_position = True)
-                op.addOperation(node_op)
-            op.push()
         self._controller.toolOperationStopped.emit(self)
 
-    ##  Set the y-location of the selected object(s) by translating relative to the selection bounding box bottom
-    #
-    #   \param z type(float) location in mm
-    def setZ(self, z):
-        Benchmark.start("Moving object in Z from {start} to {end}".format(start = self.getZ(), end = z))
+    ##  Set the y-location of the selected object(s) by translating relative to
+    #   the selection bounding box bottom.
+    #   \param z Location in mm.
+    def setZ(self, z: str) -> None:
         parsed_z = self._parseInt(z)
         bounding_box = Selection.getBoundingBox()
 
-        op = GroupedOperation()
         if not Float.fuzzyCompare(parsed_z, float(bounding_box.bottom), DIMENSION_TOLERANCE):
-            for selected_node in self._getSelectedObjectsWithoutSelectedAncestors():
-                # Note: The switching of z & y is intentional. We display z as up for the user,
-                # But store the data in openGL space.
-                world_position = selected_node.getWorldPosition()
-                new_position = world_position.set(y=parsed_z + (world_position.y - bounding_box.bottom))
-                node_op = TranslateOperation(selected_node, new_position, set_position = True)
-                op.addOperation(node_op)
-            op.push()
+            selected_nodes = self._getSelectedObjectsWithoutSelectedAncestors()
+            if len(selected_nodes) > 1:
+                op = GroupedOperation()
+                for selected_node in selected_nodes:
+                    # Note: The switching of z & y is intentional. We display z as up for the user,
+                    # But store the data in openGL space.
+                    world_position = selected_node.getWorldPosition()
+                    new_position = world_position.set(y = parsed_z + (world_position.y - bounding_box.bottom))
+                    node_op = TranslateOperation(selected_node, new_position, set_position = True)
+                    op.addOperation(node_op)
+                op.push()
+            else:
+                for selected_node in selected_nodes:
+                    world_position = selected_node.getWorldPosition()
+                    new_position = world_position.set(y=parsed_z + (world_position.y - bounding_box.bottom))
+                    TranslateOperation(selected_node, new_position, set_position=True).push()
         self._controller.toolOperationStopped.emit(self)
 
     ##  Set which axis/axes are enabled for the current translate operation
     #
-    #   \param axis type(list) list of axes (expressed as ToolHandle enum)
-    def setEnabledAxis(self, axis):
+    #   \param axis List of axes (expressed as ToolHandle enum).
+    def setEnabledAxis(self, axis: List[int]) -> None:
         self._enabled_axis = axis
         self._handle.setEnabledAxis(axis)
 
-
-    ##  Set lock setting to the object. This setting will be used to prevent model movement on the build plate
-    #
-    #   \param value type(bool) the setting state
-    def setLockPosition(self, value):
+    ##  Set lock setting to the object. This setting will be used to prevent
+    #   model movement on the build plate.
+    #   \param value The setting state.
+    def setLockPosition(self, value: bool) -> None:
         for selected_node in self._getSelectedObjectsWithoutSelectedAncestors():
-            selected_node.setSetting(SceneNodeSettings.LockPosition, value)
+            selected_node.setSetting(SceneNodeSettings.LockPosition, str(value))
 
-    def getLockPosition(self):
+    def getLockPosition(self) -> Union[str, bool]:
         total_size = Selection.getCount()
         false_state_counter = 0
         true_state_counter = 0
         if Selection.hasSelection():
             for selected_node in self._getSelectedObjectsWithoutSelectedAncestors():
-
-                if selected_node.getSetting(SceneNodeSettings.LockPosition, False):
+                if selected_node.getSetting(SceneNodeSettings.LockPosition, "False") != "False":
                     true_state_counter += 1
                 else:
-                    false_state_counter +=1
+                    false_state_counter += 1
 
-            if  total_size == false_state_counter: # if no locked positions
+            if total_size == false_state_counter: # if no locked positions
                 return False
             elif total_size == true_state_counter: # if all selected objects are locked
                 return True
             else:
                 return "partially"  # if at least one is locked
 
-
         return False
 
-    ##  Handle mouse and keyboard events
-    #
-    #   \param event type(Event)
-    def event(self, event):
+    ##  Handle mouse and keyboard events.
+    #   \param event The event to handle.
+    #   \return Whether this event has been caught by this tool (True) or should
+    #   be passed on (False).
+    def event(self, event: Event) -> bool:
         super().event(event)
 
         # Make sure the displayed values are updated if the bounding box of the selected mesh(es) changes
@@ -205,16 +214,17 @@ class TranslateTool(Tool):
             for node in self._getSelectedObjectsWithoutSelectedAncestors():
                 node.boundingBoxChanged.disconnect(self.propertyChanged)
 
-        if event.type == Event.KeyPressEvent and event.key == KeyEvent.ShiftKey:
+        if event.type == Event.KeyPressEvent and cast(KeyEvent, event).key == KeyEvent.ShiftKey:
             return False
-
 
         if event.type == Event.MousePressEvent and self._controller.getToolsEnabled():
             # Start a translate operation
-            if MouseEvent.LeftButton not in event.buttons:
+            if MouseEvent.LeftButton not in cast(MouseEvent, event).buttons:
                 return False
 
-            id = self._selection_pass.getIdAtPosition(event.x, event.y)
+            if not self._selection_pass:
+                return False
+            id = self._selection_pass.getIdAtPosition(cast(MouseEvent, event).x, cast(MouseEvent, event).y)
             if not id:
                 return False
 
@@ -225,7 +235,10 @@ class TranslateTool(Tool):
 
             self._moved = False
 
-            camera_direction = self._controller.getScene().getActiveCamera().getPosition().normalized()
+            camera = self._controller.getScene().getActiveCamera()
+            if not camera:
+                return False
+            camera_direction = camera.getPosition().normalized()
 
             abs_x = abs(camera_direction.x)
             abs_y = abs(camera_direction.y)
@@ -249,6 +262,7 @@ class TranslateTool(Tool):
                     self.setLockedAxis(ToolHandle.XAxis)  # Do not move y / vertical
 
             self.setDragPlane(Plane(plane_vector, 0))
+            return True
 
         if event.type == Event.MouseMoveEvent:
             # Perform a translate operation
@@ -256,37 +270,47 @@ class TranslateTool(Tool):
             if not self.getDragPlane():
                 return False
 
+            x = cast(MouseEvent, event).x
+            y = cast(MouseEvent, event).y
+
             if not self.getDragStart():
-                self.setDragStart(event.x, event.y)
+                self.setDragStart(x, y)
                 return False
 
-            drag = self.getDragVector(event.x, event.y)
+            drag = self.getDragVector(x, y)
             if drag:
                 if self._grid_snap and drag.length() < self._grid_size:
                     return False
 
                 if self.getLockedAxis() == ToolHandle.XAxis:
-                    drag = drag.set(y=0, z=0)
+                    drag = drag.set(y = 0, z = 0)
                 elif self.getLockedAxis() == ToolHandle.YAxis:
-                    drag = drag.set(x=0, z=0)
+                    drag = drag.set(x = 0, z = 0)
                 elif self.getLockedAxis() == ToolHandle.ZAxis:
-                    drag = drag.set(x=0, y=0)
+                    drag = drag.set(x = 0, y = 0)
 
                 if not self._moved:
                     self._moved = True
                     self._distance = Vector(0, 0, 0)
                     self.operationStarted.emit(self)
 
-                op = GroupedOperation()
-                for node in self._getSelectedObjectsWithoutSelectedAncestors():
-                    if not node.getSetting(SceneNodeSettings.LockPosition, False):
-                        op.addOperation(TranslateOperation(node, drag))
+                selected_nodes = self._getSelectedObjectsWithoutSelectedAncestors()
+                if len(selected_nodes) > 1:
+                    op = GroupedOperation()
+                    for node in selected_nodes:
+                        if node.getSetting(SceneNodeSettings.LockPosition, "False") == "False":
+                            op.addOperation(TranslateOperation(node, drag))
+                    op.push()
+                else:
+                    for node in selected_nodes:
+                        if node.getSetting(SceneNodeSettings.LockPosition, "False") == "False":
+                            TranslateOperation(node, drag).push()
 
-                op.push()
-
+                if not self._distance:
+                    self._distance = Vector(0, 0, 0)
                 self._distance += drag
 
-            self.setDragStart(event.x, event.y)
+            self.setDragStart(x, y)
 
             # Rate-limit the angle change notification
             # This is done to prevent the UI from being flooded with property change notifications,
@@ -306,13 +330,13 @@ class TranslateTool(Tool):
                 self.propertyChanged.emit()
                 self.setLockedAxis(ToolHandle.NoAxis)
                 self.setDragPlane(None)
-                self.setDragStart(None, None)
+                self.setDragStart(cast(MouseEvent, event).x, cast(MouseEvent, event).y)
                 return True
 
         return False
 
-    ##  Return a formatted distance of the current translate operation
-    #
-    #   \return type(String) fully formatted string showing the distance by which the mesh(es) are dragged
-    def getToolHint(self):
+    ##  Return a formatted distance of the current translate operation.
+    #   \return Fully formatted string showing the distance by which the
+    #   mesh(es) are dragged.
+    def getToolHint(self) -> Optional[str]:
         return "%.2f mm" % self._distance.length() if self._distance else None

@@ -34,6 +34,11 @@ class LocalContainerProvider(ContainerProvider):
         self._id_to_path = {}  # type: Dict[str, str] #Translates container IDs to the path to where the file is located
         self._id_to_mime = {}  # type: Dict[str, MimeType] #Translates container IDs to their MIME type.
 
+        self._is_read_only_cache = {}  # type: Dict[str, bool]
+
+    def getContainerFilePathById(self, container_id: str) -> Optional[str]:
+        return self._id_to_path.get(container_id)
+
     ##  Gets the IDs of all local containers.
     #
     #   \return A sequence of all container IDs.
@@ -159,8 +164,10 @@ class LocalContainerProvider(ContainerProvider):
     #   A container can only be modified if it is stored in the data directory.
     #   \return Whether the specified container is read-only.
     def isReadOnly(self, container_id: str) -> bool:
+        if container_id in self._is_read_only_cache:
+            return self._is_read_only_cache[container_id]
         storage_path = os.path.realpath(Resources.getDataStoragePath())
-        file_path = self._id_to_path[container_id] #If KeyError: We don't know this ID.
+        file_path = self._id_to_path[container_id]  # If KeyError: We don't know this ID.
 
         # The container is read-only if file_path is not a subdirectory of storage_path.
         if Platform.isWindows():
@@ -172,6 +179,7 @@ class LocalContainerProvider(ContainerProvider):
                 result = True
         else:
             result = os.path.commonpath([storage_path, os.path.realpath(file_path)]) != storage_path
+        self._is_read_only_cache[container_id] = result
         return result
 
     ##  Remove or unregister an id.

@@ -7,7 +7,7 @@ import signal
 from typing import List
 from typing import Any, cast, Dict, Optional
 
-from PyQt5.QtCore import Qt, QCoreApplication, QEvent, QUrl, pyqtProperty, pyqtSignal, pyqtSlot, QLocale, QTranslator, QT_VERSION_STR, PYQT_VERSION_STR
+from PyQt5.QtCore import Qt, QCoreApplication, QEvent, QUrl, pyqtProperty, pyqtSignal, pyqtSlot, QT_VERSION_STR, PYQT_VERSION_STR
 from PyQt5.QtQml import QQmlApplicationEngine, QQmlComponent, QQmlContext, QQmlError
 from PyQt5.QtWidgets import QApplication, QSplashScreen, QMessageBox, QSystemTrayIcon
 from PyQt5.QtGui import QIcon, QPixmap, QFontMetrics
@@ -34,6 +34,7 @@ from UM.Job import Job #For typing.
 from UM.JobQueue import JobQueue
 from UM.VersionUpgradeManager import VersionUpgradeManager
 from UM.View.GL.OpenGLContext import OpenGLContext
+from UM.Version import Version
 
 from UM.Operations.GroupedOperation import GroupedOperation #To clear the scene.
 from UM.Operations.RemoveSceneNodeOperation import RemoveSceneNodeOperation #To clear the scene.
@@ -56,10 +57,10 @@ class UnsupportedVersionError(Exception):
     pass
 
 
-# Check PyQt version, we only support 5.4 or higher.
+# Check PyQt version, we only support 5.9 or higher.
 major, minor = PYQT_VERSION_STR.split(".")[0:2]
-if int(major) < 5 or (int(major) == 5 and int(minor) < 4):
-    raise UnsupportedVersionError("This application requires at least PyQt 5.4.0")
+if int(major) < 5 or (int(major) == 5 and int(minor) < 9):
+    raise UnsupportedVersionError("This application requires at least PyQt 5.9.0")
 
 
 ##  Application subclass that provides a Qt application object.
@@ -118,6 +119,8 @@ class QtApplication(QApplication, Application):
 
     def initialize(self) -> None:
         super().initialize()
+        # Initialize the package manager to remove and install scheduled packages.
+        self._package_manager = self._package_manager_class(self, parent = self)
 
         self._mesh_file_handler = MeshFileHandler(self) #type: MeshFileHandler
         self._workspace_file_handler = WorkspaceFileHandler(self) #type: WorkspaceFileHandler
@@ -128,7 +131,7 @@ class QtApplication(QApplication, Application):
         self.setAttribute(Qt.AA_UseDesktopOpenGL)
         major_version, minor_version, profile = OpenGLContext.detectBestOpenGLVersion()
 
-        if major_version is None and minor_version is None and profile is None:
+        if major_version is None and minor_version is None and profile is None and not self.getIsHeadLess():
             Logger.log("e", "Startup failed because OpenGL version probing has failed: tried to create a 2.0 and 4.1 context. Exiting")
             QMessageBox.critical(None, "Failed to probe OpenGL",
                                  "Could not probe OpenGL. This program requires OpenGL 2.0 or higher. Please check your video card drivers.")
@@ -136,7 +139,8 @@ class QtApplication(QApplication, Application):
         else:
             opengl_version_str = OpenGLContext.versionAsText(major_version, minor_version, profile)
             Logger.log("d", "Detected most suitable OpenGL context version: %s", opengl_version_str)
-        OpenGLContext.setDefaultFormat(major_version, minor_version, profile = profile)
+        if not self.getIsHeadLess():
+            OpenGLContext.setDefaultFormat(major_version, minor_version, profile = profile)
 
         self._qml_import_paths.append(os.path.join(os.path.dirname(sys.executable), "qml"))
         self._qml_import_paths.append(os.path.join(self.getInstallPrefix(), "Resources", "qml"))
@@ -194,8 +198,8 @@ class QtApplication(QApplication, Application):
             self._preferences.deserialize(serialized)
             self._preferences.setValue("general/plugins_to_remove", "")
             self._preferences.writeToFile(preferences_filename)
-        except FileNotFoundError:
-            Logger.log("i", "The preferences file cannot be found, will use default values")
+        except (FileNotFoundError, UnicodeDecodeError):
+            Logger.log("i", "The preferences file cannot be found or it is corrupted, so we will use default values")
 
         # Force the configuration file to be written again since the list of plugins to remove maybe changed
         self.showSplashMessage(i18n_catalog.i18nc("@info:progress", "Loading preferences..."))
@@ -212,6 +216,18 @@ class QtApplication(QApplication, Application):
         # so we need to reset those values AFTER the Preferences file is loaded.
         self._plugin_registry.initializeAfterPluginsAreLoaded()
 
+        # Check if we have just updated from an older version
+        self._preferences.addPreference("general/last_run_version", "")
+        last_run_version_str = self._preferences.getValue("general/last_run_version")
+        if not last_run_version_str:
+            last_run_version_str = self._version
+        last_run_version = Version(last_run_version_str)
+        current_version = Version(self._version)
+        if last_run_version < current_version:
+            self._just_updated_from_old_version = True
+        self._preferences.setValue("general/last_run_version", str(current_version))
+        self._preferences.writeToFile(self._preferences_filename)
+
         # Preferences: recent files
         self._preferences.addPreference("%s/recent_files" % self._app_name, "")
         file_names = self._preferences.getValue("%s/recent_files" % self._app_name).split(";")
@@ -220,12 +236,13 @@ class QtApplication(QApplication, Application):
                 continue
             self._recent_files.append(QUrl.fromLocalFile(file_name))
 
-        # Initialize System tray icon and make it invisible because it is used only to show pop up messages
-        self._tray_icon = None
-        if self._tray_icon_name:
-            self._tray_icon = QIcon(Resources.getPath(Resources.Images, self._tray_icon_name))
-            self._tray_icon_widget = QSystemTrayIcon(self._tray_icon)
-            self._tray_icon_widget.setVisible(False)
+        if not self.getIsHeadLess():
+            # Initialize System tray icon and make it invisible because it is used only to show pop up messages
+            self._tray_icon = None
+            if self._tray_icon_name:
+                self._tray_icon = QIcon(Resources.getPath(Resources.Images, self._tray_icon_name))
+                self._tray_icon_widget = QSystemTrayIcon(self._tray_icon)
+                self._tray_icon_widget.setVisible(False)
 
     def initializeEngine(self) -> None:
         # TODO: Document native/qml import trickery
@@ -417,6 +434,9 @@ class QtApplication(QApplication, Application):
         Logger.log("d", "Shutting down %s", self.getApplicationName())
         self._is_shutting_down = True
 
+        # garbage collect tray icon so it gets properly closed before the application is closed
+        self._tray_icon_widget = None
+
         if save_data:
             try:
                 self.savePreferences()
@@ -432,6 +452,9 @@ class QtApplication(QApplication, Application):
             self.getBackend().close()
         except Exception as e:
             Logger.log("e", "Exception while closing backend: %s", repr(e))
+
+        if self._tray_icon_widget:
+            self._tray_icon_widget.deleteLater()
 
         self.quit()
 
@@ -457,7 +480,7 @@ class QtApplication(QApplication, Application):
 
     ## Create a class variable so we can manage the splash in the CrashHandler dialog when the Application instance
     # is not yet created, e.g. when an error occurs during the initialization
-    splash = None
+    splash = None  # type: Optional[QSplashScreen]
 
     def createSplash(self) -> None:
         if not self.getIsHeadLess():
@@ -577,7 +600,7 @@ class QtApplication(QApplication, Application):
             # determine a device pixel ratio from font metrics, using the same logic as UM.Theme
             fontPixelRatio = QFontMetrics(QCoreApplication.instance().font()).ascent() / 11
             # round the font pixel ratio to quarters
-            fontPixelRatio = int(fontPixelRatio * 4)/4
+            fontPixelRatio = int(fontPixelRatio * 4) / 4
             return fontPixelRatio
 
 
